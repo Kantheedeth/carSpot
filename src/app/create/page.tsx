@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRef, useState } from "react";
+import { useRouter } from "next/navigation"; // ← add this line
 
 type Stage = "idle" | "scanning" | "censored";
 type Box = { x: number; y: number; w: number; h: number };
@@ -44,13 +45,17 @@ function CreateFlow() {
   const [boxes, setBoxes] = useState<Box[]>([]);
   const [confirm, setConfirm] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [file, setFile] = useState<File | null>(null); // remember picked file
+  const [submitting, setSubmitting] = useState(false); // show upload state
+  const router = useRouter(); // navigate after upload
 
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
+    setFile(f); // save file object
     const url = URL.createObjectURL(f);
     setFileUrl(url);
-    fakeScan(); // start the fake AI pipeline
+    fakeScan();
   }
 
   function fakeScan() {
@@ -81,11 +86,43 @@ function CreateFlow() {
     if (inputRef.current) inputRef.current.value = "";
   }
 
+  async function handlePublish() {
+    if (!(stage === "censored" && confirm) || !file) return;
+
+    try {
+      setSubmitting(true);
+
+      const fd = new FormData();
+      fd.append("photo", file); // field name must be "photo"
+
+      const base = process.env.NEXT_PUBLIC_API_BASE!; // from your .env.local
+      const res = await fetch(`${base}/api/posts`, {
+        method: "POST",
+        body: fd,
+        headers: {
+          "x-user-id": "1", // temporary test user
+          "x-role": "ADMIN",
+        },
+      });
+
+      if (!res.ok) throw new Error(await res.text());
+      const data = (await res.json()) as { post_id: number };
+      router.push(`/post/${data.post_id}`); // go to new post page
+    } catch (err) {
+      console.error(err);
+      alert("Upload failed.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[1fr_320px]">
       {/* LEFT: Main card */}
       <div className="rounded-2xl border border-white/10 bg-neutral-900/50 p-4 ring-1 ring-white/10">
-        <h1 className="mb-3 text-xl font-semibold text-white">Upload Car Post</h1>
+        <h1 className="mb-3 text-xl font-semibold text-white">
+          Upload Car Post
+        </h1>
 
         {/* Upload / Preview panel */}
         <div className="relative overflow-hidden rounded-xl border border-white/10 bg-neutral-900/60">
@@ -114,9 +151,14 @@ function CreateFlow() {
                   AI scanning your photo…
                 </p>
                 <div className="h-2 overflow-hidden rounded-full bg-white/10">
-                  <div className="h-full bg-white" style={{ width: `${progress}%` }} />
+                  <div
+                    className="h-full bg-white"
+                    style={{ width: `${progress}%` }}
+                  />
                 </div>
-                <p className="mt-2 text-center text-xs text-white/60">{progress}%</p>
+                <p className="mt-2 text-center text-xs text-white/60">
+                  {progress}%
+                </p>
               </div>
             </div>
           )}
@@ -188,8 +230,9 @@ function CreateFlow() {
               className="mt-0.5"
             />
             <span>
-              I confirm this photo does not reveal personal location or sensitive
-              information other than the automatically blurred regions.
+              I confirm this photo does not reveal personal location or
+              sensitive information other than the automatically blurred
+              regions.
             </span>
           </label>
         )}
@@ -204,14 +247,15 @@ function CreateFlow() {
           </button>
 
           <button
-            disabled={!(stage === "censored" && confirm)}
+            onClick={handlePublish}
+            disabled={!(stage === "censored" && confirm && file) || submitting}
             className={`rounded-lg px-3 py-2 text-sm font-medium ${
-              stage === "censored" && confirm
+              stage === "censored" && confirm && file && !submitting
                 ? "bg-white text-black hover:opacity-90"
                 : "bg-white/30 text-black/60 cursor-not-allowed"
             }`}
           >
-            Ready Post
+            {submitting ? "Publishing..." : "Ready Post"}
           </button>
         </div>
       </div>
@@ -231,8 +275,12 @@ function CreateFlow() {
 function StepsHeader() {
   return (
     <div className="rounded-2xl border border-white/10 bg-neutral-900/50 p-4">
-      <h2 className="text-base font-semibold text-white">AI Censorship Journey</h2>
-      <p className="mt-1 text-sm text-white/60">Upload → Scan → Censor → Ready</p>
+      <h2 className="text-base font-semibold text-white">
+        AI Censorship Journey
+      </h2>
+      <p className="mt-1 text-sm text-white/60">
+        Upload → Scan → Censor → Ready
+      </p>
     </div>
   );
 }
@@ -244,11 +292,31 @@ function StepsList({ stage }: { stage: Stage }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-neutral-900/50 p-4">
       <ul className="space-y-3 text-sm">
-        <StepRow label="User chooses photo" active={stage !== "idle"} done={stage !== "idle"} />
-        <StepRow label="AI begins image scan" active={stage === "scanning"} done={stage !== "idle"} />
-        <StepRow label="AI detects plate region(s)" active={stage === "scanning"} done={done("scanning")} />
-        <StepRow label="Automatic blur applied" active={stage === "censored"} done={stage === "censored"} />
-        <StepRow label="Publish with censored preview" active={false} done={false} />
+        <StepRow
+          label="User chooses photo"
+          active={stage !== "idle"}
+          done={stage !== "idle"}
+        />
+        <StepRow
+          label="AI begins image scan"
+          active={stage === "scanning"}
+          done={stage !== "idle"}
+        />
+        <StepRow
+          label="AI detects plate region(s)"
+          active={stage === "scanning"}
+          done={done("scanning")}
+        />
+        <StepRow
+          label="Automatic blur applied"
+          active={stage === "censored"}
+          done={stage === "censored"}
+        />
+        <StepRow
+          label="Publish with censored preview"
+          active={false}
+          done={false}
+        />
       </ul>
     </div>
   );
@@ -267,12 +335,20 @@ function StepRow({
     <li className="flex items-center gap-3">
       <span
         className={`grid h-5 w-5 place-items-center rounded-full text-[11px] ${
-          done ? "bg-lime-400 text-black" : active ? "bg-white text-black" : "bg-white/10 text-white/70"
+          done
+            ? "bg-lime-400 text-black"
+            : active
+            ? "bg-white text-black"
+            : "bg-white/10 text-white/70"
         }`}
       >
         {done ? "✓" : active ? "•" : ""}
       </span>
-      <span className={`text-white/90 ${done ? "opacity-80 line-through" : ""}`}>{label}</span>
+      <span
+        className={`text-white/90 ${done ? "opacity-80 line-through" : ""}`}
+      >
+        {label}
+      </span>
     </li>
   );
 }
@@ -282,8 +358,8 @@ function AuditBox() {
     <div className="rounded-2xl border border-white/10 bg-neutral-900/50 p-4 text-sm text-white/80">
       <div className="mb-1 font-medium">Audit & Transparency</div>
       <p className="text-white/60">
-        A censor log (preview-only) can be sent to the moderation system.
-        This is UI-only for now.
+        A censor log (preview-only) can be sent to the moderation system. This
+        is UI-only for now.
       </p>
     </div>
   );
