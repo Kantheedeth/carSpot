@@ -7,7 +7,7 @@ import { useSession } from "@/lib/usuSession";
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const { user, isAuthed } = useSession();
+  const { user, isAuthed, isAdmin } = useSession();
 
   // for now, until you have /me, fall back to /u/{user_id} or /u/1
   const profileHref = user ? `/u/${user.user_id}` : "/login";
@@ -50,7 +50,7 @@ export default function Sidebar() {
             {/* Feed always */}
             <NavItem
               href="/"
-              icon="🏠"
+              iconSrc="/feed.png"
               label="Feed"
               pathname={pathname}
             />
@@ -59,7 +59,7 @@ export default function Sidebar() {
             {!isAuthed && (
               <NavItem
                 href="/login"
-                icon="🔑"
+                iconSrc="/window.svg"
                 label="Login"
                 pathname={pathname}
               />
@@ -70,32 +70,34 @@ export default function Sidebar() {
               <>
                 <NavItem
                   href="/create"
-                  icon="➕"
+                  iconSrc="/create.png"
                   label="Create"
                   pathname={pathname}
                   isHighlighted
                 />
                 <NavItem
                   href="/bookmarks"
-                  icon="🔖"
+                  iconSrc="/bookmark.png"
                   label="Bookmarks"
                   pathname={pathname}
                 />
                 <NavItem
                   href="/messages"
-                  icon="💬"
+                  iconSrc="/message.png"
                   label="Messages"
                   pathname={pathname}
                 />
-                <NavItem
-                  href="/admin"
-                  icon="🛠"
-                  label="Admin"
-                  pathname={pathname}
-                />
+                {isAdmin && (
+                  <NavItem
+                    href="/admin"
+                    iconSrc="/file.svg"
+                    label="Admin"
+                    pathname={pathname}
+                  />
+                )}
                 <NavItem
                   href={profileHref}
-                  icon="👤"
+                  iconSrc="/profile.png"
                   label="Profile"
                   pathname={pathname}
                 />
@@ -115,13 +117,13 @@ export default function Sidebar() {
 
 function NavItem({
   href,
-  icon,
+  iconSrc,
   label,
   pathname,
   isHighlighted = false,
 }: {
   href: string;
-  icon: string;
+  iconSrc: string;
   label: string;
   pathname: string | null;
   isHighlighted?: boolean;
@@ -145,12 +147,15 @@ function NavItem({
       )}
 
       <span
-        className={`
-          grid h-10 w-10 place-items-center text-[22px] leading-none
-          ${isHighlighted ? "rounded-lg bg-white/10" : ""}
-        `}
+        className={`grid h-10 w-10 place-items-center ${isHighlighted ? "rounded-lg bg-white/10" : ""}`}
       >
-        {icon}
+        <Image
+          src={iconSrc}
+          alt={`${label} icon`}
+          width={24}
+          height={24}
+          className="h-6 w-6 object-contain"
+        />
       </span>
 
       <span className="ml-1 hidden truncate text-[15px] font-medium group-hover:block">

@@ -1,9 +1,12 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
+import multer from "multer";
+import path from "path";
 import { pool } from "../models/db";
 import jwt from "jsonwebtoken";
 import { readAuth } from "../middleware/auth";
 import type { RowDataPacket, ResultSetHeader } from "mysql2";
+import { AVATAR_DIR } from "../path";
 
 const router = Router();
 
@@ -24,6 +27,27 @@ const clientBase = {
   secure: isProd,
   domain: COOKIE_DOMAIN,
 };
+
+const avatarStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, AVATAR_DIR),
+  filename: (_req, file, cb) =>
+    cb(
+      null,
+      Date.now() +
+        "_" +
+        file.originalname.replace(/\s+/g, "").replace(/[^\w.\-]/g, "")
+    ),
+});
+const uploadAvatar = multer({
+  storage: avatarStorage,
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (![".jpg", ".jpeg", ".png", ".webp"].includes(ext)) {
+      return cb(new Error("Only jpg/png/webp images allowed"));
+    }
+    cb(null, true);
+  },
+});
 
 async function loadRoles(userId: number): Promise<string[]> {
   const [rows] = await pool.query<RowDataPacket[]>(
@@ -71,63 +95,71 @@ router.get("/auth/guest", (_req: Request, res: Response) => {
     profile_pic_url?: string
   }
 */
-router.post("/auth/signup", async (req: Request, res: Response) => {
-  const { email, password, display_name, profile_pic_url } = req.body || {};
+router.post(
+  "/auth/signup",
+  uploadAvatar.single("avatar"),
+  async (req: Request, res: Response) => {
+    const { email, password, display_name, profile_pic_url } = req.body || {};
+    const uploadedAvatar = req.file
+      ? `/uploads/avatars/${req.file.filename}`
+      : undefined;
 
-  if (
-    !email ||
-    typeof email !== "string" ||
-    !password ||
-    typeof password !== "string" ||
-    !display_name ||
-    typeof display_name !== "string"
-  ) {
-    return res.status(400).json({ ok: false, error: "Missing fields" });
-  }
-
-  try {
-    // email unique?
-    const [existing] = await pool.query<RowDataPacket[]>(
-      "SELECT user_id FROM User WHERE email = ? LIMIT 1",
-      [email]
-    );
-    if (existing.length) {
-      return res
-        .status(409)
-        .json({ ok: false, error: "Email already registered" });
+    if (
+      !email ||
+      typeof email !== "string" ||
+      !password ||
+      typeof password !== "string" ||
+      !display_name ||
+      typeof display_name !== "string"
+    ) {
+      return res.status(400).json({ ok: false, error: "Missing fields" });
     }
 
-    // store plain password for now (DEV ONLY)
-    const [ins] = await pool.query<ResultSetHeader>(
-      `INSERT INTO User (email, password, display_name, profile_pic_url, status)
+    try {
+      // email unique?
+      const [existing] = await pool.query<RowDataPacket[]>(
+        "SELECT user_id FROM User WHERE email = ? LIMIT 1",
+        [email]
+      );
+      if (existing.length) {
+        return res
+          .status(409)
+          .json({ ok: false, error: "Email already registered" });
+      }
+
+      // store plain password for now (DEV ONLY)
+      const [ins] = await pool.query<ResultSetHeader>(
+        `INSERT INTO User (email, password, display_name, profile_pic_url, status)
        VALUES (?, ?, ?, ?, 'ACTIVE')`,
-      [email, password, display_name, profile_pic_url || null]
-    );
+        [email, password, display_name, uploadedAvatar || profile_pic_url || null]
+      );
 
-    const userId = ins.insertId;
+      const userId = ins.insertId;
 
-    // ensure USER role (role_id = 1)
-    await pool.query<ResultSetHeader>(
-      "INSERT IGNORE INTO UserRole (user_id, role_id) VALUES (?, 1)",
-      [userId]
-    );
+      // ensure USER role (role_id = 1)
+      await pool.query<ResultSetHeader>(
+        "INSERT IGNORE INTO UserRole (user_id, role_id) VALUES (?, 1)",
+        [userId]
+      );
 
-    const roles = await loadRoles(userId);
-    setAuthCookie(res, userId, roles);
+      const roles = await loadRoles(userId);
+      setAuthCookie(res, userId, roles);
 
-    res.json({
-      ok: true,
-      user_id: userId,
-      roles,
-      email,
-      display_name,
-    });
-  } catch (err: unknown) {
-    console.error("[signup]", err);
-    const msg = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ ok: false, error: msg });
+      res.json({
+        ok: true,
+        user_id: userId,
+        roles,
+        email,
+        display_name,
+        profile_pic_url: uploadedAvatar || profile_pic_url || null,
+      });
+    } catch (err: unknown) {
+      console.error("[signup]", err);
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ ok: false, error: msg });
+    }
   }
-});
+);
 
 /* ---------- LOGIN (email + password) ---------- */
 /*

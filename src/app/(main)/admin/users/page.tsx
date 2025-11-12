@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { MOCK_POSTS, MOCK_USERSTATS } from "lib/mock";
+import AdminGuard from "../AdminGuard";
 
 type Row = {
   user_id: number;
@@ -32,7 +33,8 @@ export default function AdminUsers() {
   });
 
   return (
-    <section className="space-y-4">
+    <AdminGuard>
+      <section className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-white">Admin · Users</h1>
         <div className="text-sm text-white/60">{rows.length} users</div>
@@ -79,7 +81,8 @@ export default function AdminUsers() {
           </tbody>
         </table>
       </div>
-    </section>
+      </section>
+    </AdminGuard>
   );
 }
 

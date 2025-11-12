@@ -25,7 +25,16 @@ export async function api<T>(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`API ${res.status} ${text}`);
+    let message: string | undefined;
+    try {
+      const parsed = text ? JSON.parse(text) : null;
+      message = parsed?.error || parsed?.message;
+    } catch {
+      message = text;
+    }
+    const error = new Error(message || `API ${res.status}`);
+    (error as any).status = res.status;
+    throw error;
   }
 
   // handle empty response body gracefully

@@ -41,5 +41,6 @@ export function useSession() {
     user,
     loading,
     isAuthed: !!user,
+    isAdmin: !!user?.roles?.includes("ADMIN"),
   };
 }

@@ -15,6 +15,7 @@ import ratings from "./routes/ratings";
 import bookmarks from "./routes/bookmarks";
 import dms from "./routes/dms";
 import settings from "./routes/settings";
+import admin from "./routes/admin";
 import auth from "./routes/auth";
 import { attachAuth } from "./middleware/auth"; 
 
@@ -76,6 +77,7 @@ app.use("/api", bookmarks);
 app.use("/api", dms);
 app.use("/api", settings);
 app.use("/api", auth);
+app.use("/api", admin);
 
 // 404 trap
 app.use((req, res) => {

@@ -9,7 +9,12 @@ export default async function Page({ params }: { params: { id: string } }) {
   const token = cookieStore.get("carspot_token")?.value;
 
   const headers: HeadersInit = {
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(token
+      ? {
+          Authorization: `Bearer ${token}`,
+          Cookie: `carspot_token=${token}`,
+        }
+      : {}),
     "Content-Type": "application/json",
   };
 
@@ -40,10 +45,16 @@ export default async function Page({ params }: { params: { id: string } }) {
     : [];
 
   let meId: number | undefined;
+  let isAdmin = false;
   if (meRes.ok) {
     const meJson = await meRes.json().catch(() => null);
     if (meJson?.user?.user_id) {
       meId = meJson.user.user_id;
+    }
+    if (meJson?.user?.roles) {
+      isAdmin = Array.isArray(meJson.user.roles)
+        ? meJson.user.roles.includes("ADMIN")
+        : false;
     }
   }
 
@@ -53,6 +64,7 @@ export default async function Page({ params }: { params: { id: string } }) {
       stats={stats}
       posts={posts}
       meId={meId}
+      isAdmin={isAdmin}
     />
   );
 }

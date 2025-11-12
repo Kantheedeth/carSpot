@@ -22,9 +22,15 @@ export default function LoginPage() {
       });
       router.push("/");
     } catch (err: unknown) {
-      console.error(err);
-      const msg = err instanceof Error ? err.message : "Login failed";
-      setErr("Login failed: " + msg);
+      if (err instanceof Error) {
+        const msg =
+          err.message.includes("Invalid credentials")
+            ? "Invalid email or password."
+            : err.message;
+        setErr(msg);
+      } else {
+        setErr("Login failed. Please try again.");
+      }
     } finally {
       setLoading(false);
     }

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { useGuest } from "@/lib/useGuest";
+import Link from "next/link";
 
 type PostFeedDto = {
   post_id: number;
@@ -17,30 +18,57 @@ type PostFeedDto = {
   status: "PUBLISHED" | "PENDING" | "DELETED";
   moderation_status: "PENDING" | "PASSED" | "REJECTED";
   my_score?: number | null; // 👈 add this
+  flagged?: number | null;
 };
 
 type Ratings = Record<number, number>;
 type RatedFlags = Record<number, boolean>;
+type UserSearchResult = {
+  user_id: number;
+  display_name: string | null;
+};
+
+const formatAvg = (
+  value: number | string | null | undefined,
+  count?: number
+) => {
+  if (!count) return "—";
+  const num = Number(value);
+  return Number.isFinite(num) ? num.toFixed(2) : "—";
+};
 
 export default function FeedPage() {
   const [ratings, setRatings] = useState<Ratings>({});
   const [ratedFlags, setRatedFlags] = useState<RatedFlags>({});
   const [posts, setPosts] = useState<PostFeedDto[]>([]);
   const [bmk, setBmk] = useState<Set<number>>(new Set());
+  const [feedError, setFeedError] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [searchResults, setSearchResults] = useState<UserSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
   const isGuest = useGuest();
+  const router = useRouter();
 
   const base = (process.env.NEXT_PUBLIC_API_BASE || "").replace(/\/+$/, "");
 
   useEffect(() => {
+    let cancelled = false;
+
     (async () => {
-      // 1) posts
-      const res = await fetch(`${base}/api/posts?page=1&limit=20`, {
-        credentials: "include",
-        cache: "no-store",
-      });
-      if (res.ok) {
+      try {
+        const res = await fetch(`${base}/api/posts?page=1&limit=20`, {
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (!res.ok) {
+          throw new Error(`posts ${res.status}`);
+        }
+
         const data: PostFeedDto[] = await res.json();
+        if (cancelled) return;
+
         setPosts(data);
+        setFeedError(null);
 
         if (!isGuest) {
           const initialRatings: Ratings = {};
@@ -56,27 +84,89 @@ export default function FeedPage() {
           setRatings(initialRatings);
           setRatedFlags(initialFlags);
         } else {
-          // guests never have personal ratings
           setRatings({});
           setRatedFlags({});
         }
-      }
 
-      // 2) bookmarks (only logged-in)
-      if (!isGuest) {
-        const r2 = await fetch(`${base}/api/me/bookmarks`, {
-          credentials: "include",
-          cache: "no-store",
-        });
-        if (r2.ok) {
-          const rows: { post_id: number }[] = await r2.json();
-          setBmk(new Set(rows.map((r) => r.post_id)));
+        if (!isGuest) {
+          try {
+            const r2 = await fetch(`${base}/api/me/bookmarks`, {
+              credentials: "include",
+              cache: "no-store",
+            });
+            if (!cancelled && r2.ok) {
+              const rows: { post_id: number }[] = await r2.json();
+              setBmk(new Set(rows.map((r) => r.post_id)));
+            } else if (!cancelled) {
+              setBmk(new Set());
+            }
+          } catch (err) {
+            if (!cancelled) {
+              console.error("[feed] bookmarks failed", err);
+              setBmk(new Set());
+            }
+          }
+        } else if (!cancelled) {
+          setBmk(new Set());
         }
-      } else {
+      } catch (err) {
+        if (cancelled) return;
+        console.error("[feed] failed to load posts", err);
+        setPosts([]);
+        setRatings({});
+        setRatedFlags({});
         setBmk(new Set());
+        setFeedError(
+          isGuest
+            ? "Guest mode can’t reach the API right now."
+            : "Unable to load posts. Please try again."
+        );
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [base, isGuest]);
+
+  useEffect(() => {
+    if (searchTerm.trim().length < 2) {
+      setSearchResults([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    setSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `${base}/api/users/search?query=${encodeURIComponent(searchTerm)}`,
+          {
+            credentials: "include",
+            cache: "no-store",
+            signal: controller.signal,
+          }
+        );
+        if (res.ok) {
+          const data: UserSearchResult[] = await res.json();
+          setSearchResults(data);
+        } else {
+          setSearchResults([]);
+        }
+      } catch (err) {
+        if (!(err instanceof DOMException && err.name === "AbortError")) {
+          console.error("user search failed", err);
+        }
+      } finally {
+        setSearching(false);
+      }
+    }, 250);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [base, searchTerm]);
 
   async function toggleBookmark(postId: number) {
     if (isGuest) return;
@@ -112,7 +202,51 @@ export default function FeedPage() {
 
   return (
     <section className="mx-auto max-w-3xl space-y-6">
-      <h2 className="text-lg font-semibold text-white">Latest Posts</h2>
+      {feedError && (
+        <div className="rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
+          {feedError}
+        </div>
+      )}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h2 className="text-lg font-semibold text-white">Latest Posts</h2>
+        <div className="relative w-full sm:w-64">
+          <input
+            type="search"
+            placeholder="Search users…"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/50 focus:outline-none focus:ring-2 focus:ring-white/40"
+          />
+          {searchTerm.length >= 2 && (
+            <div className="absolute right-0 z-20 mt-1 w-full overflow-hidden rounded-xl border border-white/10 bg-[#0f141a] shadow-xl">
+              {searching ? (
+                <div className="px-3 py-2 text-xs text-white/50">Searching…</div>
+              ) : searchResults.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-white/50">
+                  No users found
+                </div>
+              ) : (
+                <ul>
+                  {searchResults.map((user) => (
+                    <li key={user.user_id}>
+                      <button
+                        onClick={() => {
+                          setSearchTerm("");
+                          setSearchResults([]);
+                          router.push(`/u/${user.user_id}`);
+                        }}
+                        className="w-full px-3 py-2 text-left text-sm text-white/80 hover:bg-white/5"
+                      >
+                        {user.display_name ?? `User ${user.user_id}`}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
 
       {posts.map((p) => (
         <PostRow
@@ -190,6 +324,8 @@ function PostRow({
   const [ratio, setRatio] = useState(0);
   const [shareOpen, setShareOpen] = useState(false);
   const [sharedTo, setSharedTo] = useState<string | null>(null);
+  const [reporting, setReporting] = useState(false);
+  const [reported, setReported] = useState(false);
 
   const imgPath = (p.image_url_censored || p.image_url_orig || "").trim();
   const imgSrc = imgPath.startsWith("/")
@@ -200,7 +336,8 @@ function PostRow({
   const TAP_TOL = 8;
 
   const ownerName = p.display_name ?? `User ${p.user_id}`;
-  const avg = p.avg_rating ?? 0;
+  const profileUrl = `/u/${p.user_id}`;
+  const avgDisplay = formatAvg(p.avg_rating, p.rating_count);
 
   const handleShare = async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -245,6 +382,46 @@ function PostRow({
       alert("Rating failed, please try again");
     }
   }
+
+  async function handleReport(e: React.MouseEvent) {
+    e.preventDefault();
+    if (isGuest || reporting || reported) return;
+    setReporting(true);
+    try {
+      const res = await fetch(`${apiBase}/api/posts/${p.post_id}/report`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Report failed");
+        return;
+      }
+      setReported(true);
+    } catch (err) {
+      console.error(err);
+      alert("Report failed, please try again");
+    } finally {
+      setReporting(false);
+    }
+  }
+
+  const reportButton = (
+    <button
+      onClick={handleReport}
+      disabled={isGuest || reporting || reported}
+      className="rounded-lg bg-rose-500/15 px-3 py-1.5 text-sm text-rose-200 ring-1 ring-rose-400/30 transition hover:bg-rose-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+      title={
+        isGuest
+          ? "Login to report"
+          : reported
+          ? "Already reported"
+          : "Report this post"
+      }
+    >
+      {reported ? "Reported" : reporting ? "Reporting…" : "Report"}
+    </button>
+  );
 
   return (
     <article className="overflow-hidden rounded-2xl bg-neutral-900/60 ring-1 ring-white/10">
@@ -321,12 +498,20 @@ function PostRow({
       <div className="px-4 pb-4 pt-3">
         {/* Owner + rating */}
         <div className="mb-3 flex items-baseline justify-between">
-          <h3 className="text-base font-semibold text-white">{ownerName}</h3>
+          <h3 className="text-base font-semibold">
+            <Link
+              href={profileUrl}
+              className="text-white hover:text-white/80 focus:outline-none focus:ring-2 focus:ring-white/30 rounded"
+              prefetch
+            >
+              {ownerName}
+            </Link>
+          </h3>
 
           <div className="text-sm text-white/60">
             {hasRated ? (
               <>
-                ⭐ <span className="text-white">{avg || "—"}</span>{" "}
+                ⭐ <span className="text-white">{avgDisplay}</span>{" "}
                 <span className="text-white/50">({p.rating_count})</span>
               </>
             ) : (
@@ -337,17 +522,20 @@ function PostRow({
 
         {isGuest ? (
           // -------- Guest: only share --------
-          <div className="mt-3 flex items-center justify-between">
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-xs text-white/40">
-              Login to rate or save this car.
+              Login to rate, save, or report this car.
             </div>
-            <button
-              onClick={handleShare}
-              className="inline-flex items-center gap-2 rounded-lg bg-white/5 px-3 py-1.5 text-sm text-white/80 ring-1 ring-white/10 hover:bg-white/10"
-            >
-              <span className="text-lg">📤</span>
-              <span>Share</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleShare}
+                className="inline-flex items-center gap-2 rounded-lg bg-white/5 px-3 py-1.5 text-sm text-white/80 ring-1 ring-white/10 hover:bg-white/10"
+              >
+                <span className="text-lg">📤</span>
+                <span>Share</span>
+              </button>
+              {reportButton}
+            </div>
           </div>
         ) : !hasRated ? (
           // -------- Logged-in & not rated yet: show slider --------
@@ -416,6 +604,7 @@ function PostRow({
                 >
                   <span className="text-lg">📤</span> Share
                 </button>
+                {reportButton}
                 <AnimatePresence>
                   {shareOpen && (
                     <motion.span
@@ -482,6 +671,7 @@ function PostRow({
                 >
                   <span className="text-lg">📤</span> Share
                 </button>
+                {reportButton}
               </div>
             </div>
           </>
