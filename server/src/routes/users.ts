@@ -1,80 +1,48 @@
-import { Router, Request, Response } from "express";
+import { Router } from "express";
 import type { RowDataPacket } from "mysql2";
 import { pool } from "../models/db";
 
 const r = Router();
 
-/** Row shapes returned from MySQL */
-type MeRow = RowDataPacket & {
-  user_id: number;
-  display_name: string | null;
-  status: "ACTIVE" | "BANNED" | "DELETED";
-};
-
-type UserStatsRow = RowDataPacket & {
-  user_id: number;
-  status: "ACTIVE" | "BANNED" | "DELETED";
-  post_count: number;
-  follower_count: number;
-  following_count: number;
-  bookmark_count: number;
-  successful_matches: number;
-  eligible_to_post: 0 | 1 | boolean;
-  remaining_to_post: number;
-  last_checked: Date | null;
-};
-
-type UserPostRow = RowDataPacket & {
-  post_id: number;
-  image_url_orig: string;
-  image_url_censored: string | null;
-  created_at: Date;
-  avg_rating: number | null;
-  rating_count: number;
-};
-
-// Current user (for role/visibility)
-r.get("/me", async (req: Request, res: Response) => {
-  // demo: x-user-id and x-role header; replace with real auth later
-  const userId = Number(req.headers["x-user-id"] ?? 1);
-  const role = String(req.headers["x-role"] ?? "USER");
-
-  const [rows] = await pool.query<MeRow[]>(
-    `SELECT user_id, display_name, status FROM User WHERE user_id=?`,
-    [userId]
-  );
-
-  if (rows.length === 0) return res.json(null);
-  res.json({ ...rows[0], roles: [role] });
-});
-
-// Profile stats view
-r.get("/users/:id/stats", async (req: Request, res: Response) => {
+// GET /api/users/:id/stats
+r.get("/users/:id/stats", async (req, res) => {
   const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    return res.status(400).json({ ok: false, error: "Invalid id" });
+  }
 
-  const [rows] = await pool.query<UserStatsRow[]>(
-    `SELECT * FROM vuserstats WHERE user_id=?`,
-    [id]
-  );
+  try {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      `
+      SELECT
+        u.user_id,
+        u.display_name,
+        u.status,
+        IFNULL(v.post_count, 0)          AS post_count,
+        IFNULL(v.follower_count, 0)      AS follower_count,
+        IFNULL(v.following_count, 0)     AS following_count,
+        IFNULL(v.bookmark_count, 0)      AS bookmark_count,
+        IFNULL(v.successful_matches, 0)  AS successful_matches,
+        IFNULL(v.eligible_to_post, 1)    AS eligible_to_post,
+        IFNULL(v.remaining_to_post, 0)   AS remaining_to_post,
+        v.last_checked
+      FROM \`User\` u
+      LEFT JOIN vuserstats v ON v.user_id = u.user_id
+      WHERE u.user_id = ?
+      LIMIT 1
+      `,
+      [id]
+    );
 
-  if (rows.length === 0) return res.status(404).json({ error: "not found" });
-  res.json(rows[0]);
-});
+    if (!rows.length) {
+      return res.status(404).json({ ok: false, error: "User not found" });
+    }
 
-// User posts for profile grid
-r.get("/users/:id/posts", async (req: Request, res: Response) => {
-  const id = Number(req.params.id);
-
-  const [rows] = await pool.query<UserPostRow[]>(
-    `SELECT post_id, image_url_orig, image_url_censored, created_at,
-            (score_sum/NULLIF(rating_count,0)) AS avg_rating, rating_count
-     FROM Post
-     WHERE user_id=? AND status!='DELETED'
-     ORDER BY created_at DESC`,
-    [id]
-  );
-
-  res.json(rows);
+    return res.json(rows[0]); // 👈 includes display_name now
+  } catch (err) {
+    console.error("[users/:id/stats]", err);
+    return res.status(500).json({ ok: false, error: "Failed to load stats" });
+  }
 });
 
 export default r;

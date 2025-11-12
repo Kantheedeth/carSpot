@@ -1,9 +1,10 @@
 import { Router, Request, Response } from "express";
 import { pool } from "../models/db";
+import { requireUser } from "../middleware/auth";
 
 const r = Router();
 
-// Utility type guards for MySQL errors without using `any`
+/** -------- MySQL error helpers (must be in scope) -------- */
 function getMysqlCode(err: unknown): string | undefined {
   if (err && typeof err === "object") {
     const code = (err as Record<string, unknown>).code;
@@ -11,6 +12,7 @@ function getMysqlCode(err: unknown): string | undefined {
   }
   return undefined;
 }
+
 function getMysqlMessage(err: unknown): string {
   if (err && typeof err === "object") {
     const m1 = (err as Record<string, unknown>).sqlMessage;
@@ -21,11 +23,11 @@ function getMysqlMessage(err: unknown): string {
   return String(err);
 }
 
-r.post("/posts/:id/rate", async (req: Request, res: Response) => {
-  const userId = Number(req.header("x-user-id") || 1);
+/** -------- POST /api/posts/:id/rate -------- */
+r.post("/posts/:id/rate", requireUser, async (req: Request, res: Response) => {
+  const userId = req.authUser!.user_id; // ✅ real logged-in user
   const postId = Number(req.params.id);
 
-  // body typing (no `any`)
   const body = req.body as { score?: number | string };
   const score = Number(body?.score);
 
@@ -44,11 +46,13 @@ r.post("/posts/:id/rate", async (req: Request, res: Response) => {
     res.json({ ok: true });
   } catch (e: unknown) {
     await conn.rollback();
+
     const code = getMysqlCode(e);
     if (code === "ER_DUP_ENTRY") {
       return res.status(409).json({ error: "already rated" });
     }
-    res.status(400).json({ error: getMysqlMessage(e) });
+
+    return res.status(400).json({ error: getMysqlMessage(e) });
   } finally {
     conn.release();
   }

@@ -3,24 +3,35 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useSession } from "@/lib/usuSession";
 
 type SavedRow = {
   post_id: number;
   image_url_orig: string;
   created_at: string;
-  avg_rating: number | null;   // from SELECT (p.score_sum/NULLIF(...)) AS avg_rating
+  avg_rating: number | null;
   rating_count: number;
 };
 
 export default function BookmarksPage() {
   const [rows, setRows] = useState<SavedRow[] | null>(null);
-  const base = (process.env.NEXT_PUBLIC_API_BASE || "").replace(/\/+$/, "");
-  const devHeaders = { "x-user-id": "1", "x-role": "ADMIN" }; // dev only
+  const { user, loading } = useSession();
+
+  const apiBase = (process.env.NEXT_PUBLIC_API_BASE || "").replace(/\/+$/, "");
+  const origin = apiBase.replace(/\/api$/, "");
 
   useEffect(() => {
+    if (loading) return;
+
+    // not logged in → no bookmarks
+    if (!user) {
+      setRows([]);
+      return;
+    }
+
     (async () => {
-      const res = await fetch(`${base}/api/me/bookmarks`, {
-        headers: devHeaders,
+      const res = await fetch(`${apiBase}/api/me/bookmarks`, {
+        credentials: "include",
         cache: "no-store",
       });
       if (!res.ok) {
@@ -30,13 +41,23 @@ export default function BookmarksPage() {
       }
       setRows(await res.json());
     })();
-  }, [base]);
+  }, [apiBase, user, loading]);
 
-  if (rows === null) {
+  if (loading || rows === null) {
     return (
       <section className="mx-auto max-w-3xl">
         <div className="rounded-2xl bg-neutral-900/60 p-6 text-center text-white/70 ring-1 ring-white/10">
           Loading your bookmarks…
+        </div>
+      </section>
+    );
+  }
+
+  if (!user) {
+    return (
+      <section className="mx-auto max-w-3xl">
+        <div className="rounded-2xl bg-neutral-900/60 p-6 text-center text-white/70 ring-1 ring-white/10">
+          Login to save and view bookmarks.
         </div>
       </section>
     );
@@ -55,12 +76,13 @@ export default function BookmarksPage() {
   return (
     <section className="mx-auto max-w-6xl grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
       {rows.map((p) => {
-        const path = (p.image_url_orig || "").trim();
-        const src = path.startsWith("/") ? `${base}${path}` : `${base}/${path}`;
+        const rel = (p.image_url_orig || "").trim();
+        const src = rel.startsWith("/") ? `${origin}${rel}` : `${origin}/${rel}`;
+
         return (
           <Link
             key={p.post_id}
-            href={`/post/${p.post_id}`}
+            href={{ pathname: `/post/${p.post_id}`, query: { from: "/bookmarks" } }}
             className="group overflow-hidden rounded-2xl bg-neutral-900/60 ring-1 ring-white/10 hover:bg-white/5 transition-colors"
           >
             <div className="relative aspect-[4/3] overflow-hidden">
@@ -68,8 +90,8 @@ export default function BookmarksPage() {
                 src={src}
                 alt="car"
                 onError={(e) => {
-                  const el = e.target as HTMLImageElement;
-                  const noSlash = `${base}${path.replace(/^\/+/, "")}`;
+                  const el = e.currentTarget as HTMLImageElement;
+                  const noSlash = `${origin}${rel.replace(/^\/+/, "")}`;
                   if (el.src !== noSlash) el.src = noSlash;
                 }}
                 className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"

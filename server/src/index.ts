@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import morgan from "morgan";
 import fs from "fs";
+import cookieParser from "cookie-parser";    
 import { UPLOAD_DIR, ORIG_DIR } from "./path";
 import { ping, pool } from "./models/db";
 import type { RowDataPacket } from "mysql2";
@@ -14,11 +15,15 @@ import ratings from "./routes/ratings";
 import bookmarks from "./routes/bookmarks";
 import dms from "./routes/dms";
 import settings from "./routes/settings";
+import auth from "./routes/auth";
+import { attachAuth } from "./middleware/auth"; 
 
 const app = express();                    // ← exactly once
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
+app.use(cookieParser());    
 app.use(morgan("dev"));
+app.use(attachAuth);  
 
 // serve static uploads
 console.log("[static] /uploads ->", UPLOAD_DIR);
@@ -70,6 +75,7 @@ app.use("/api", ratings);
 app.use("/api", bookmarks);
 app.use("/api", dms);
 app.use("/api", settings);
+app.use("/api", auth);
 
 // 404 trap
 app.use((req, res) => {
