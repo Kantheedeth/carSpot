@@ -1,11 +1,65 @@
 import { Router, Request, Response, NextFunction } from "express";
 import multer from "multer";
+import path from "path";
+import fs from "fs/promises";
+import sharp from "sharp";
 import type { RowDataPacket, ResultSetHeader } from "mysql2";
 import { pool } from "../models/db";
-import { ORIG_DIR } from "../path";
+import { ORIG_DIR, CENSORED_DIR } from "../path";
 import { requireUser } from "../middleware/auth";
+import { censorImage } from "../services/censor";
 
 const r = Router();
+
+async function fileExists(pathname: string) {
+  try {
+    await fs.access(pathname);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function parseCrop(body: Record<string, any>): CropInput | null {
+  const x = Number(body?.crop_x);
+  const y = Number(body?.crop_y);
+  const width = Number(body?.crop_width);
+  const height = Number(body?.crop_height);
+  if (
+    Number.isFinite(x) &&
+    Number.isFinite(y) &&
+    Number.isFinite(width) &&
+    Number.isFinite(height) &&
+    width > 0 &&
+    height > 0
+  ) {
+    return {
+      x: Math.max(0, Math.round(x)),
+      y: Math.max(0, Math.round(y)),
+      width: Math.round(width),
+      height: Math.round(height),
+    };
+  }
+  return null;
+}
+
+async function applyCropToFile(filePath: string, crop: CropInput | null) {
+  if (!crop) return;
+  const meta = await sharp(filePath).rotate().metadata();
+  const width = meta.width ?? crop.width;
+  const height = meta.height ?? crop.height;
+
+  const left = Math.min(Math.max(0, crop.x), Math.max(0, width - 1));
+  const top = Math.min(Math.max(0, crop.y), Math.max(0, height - 1));
+  const extractWidth = Math.min(crop.width, width - left);
+  const extractHeight = Math.min(crop.height, height - top);
+
+  const buffer = await sharp(filePath)
+    .rotate()
+    .extract({ left, top, width: extractWidth, height: extractHeight })
+    .toBuffer();
+  await fs.writeFile(filePath, buffer);
+}
 
 r.use((req, _res, next) => {
   console.log(`[posts] ${req.method} ${req.path}`);
@@ -71,6 +125,13 @@ type GateRow = RowDataPacket & {
   eligible_to_post: number | null;
 };
 
+type CropInput = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 const DEFAULT_MATCH_REQUIREMENT = 5;
 
 async function getPostingGate(userId: number) {
@@ -122,6 +183,10 @@ async function ensurePostingUnlocked(
   const auth = req.authUser;
   if (!auth) {
     return res.status(401).json({ ok: false, error: "Login required" });
+  }
+
+  if (auth.roles?.includes("ADMIN")) {
+    return next();
   }
 
   try {
@@ -219,19 +284,25 @@ r.get("/posts", async (req: Request, res: Response) => {
 
 r.get("/posts/eligibility", requireUser, async (req: Request, res: Response) => {
   try {
+    const auth = req.authUser!;
+    const isAdmin = auth.roles?.includes("ADMIN");
     const { required, successful, hasPosted, eligible } = await getPostingGate(
-      req.authUser!.user_id
+      auth.user_id
     );
-    const unlocked = eligible || hasPosted || successful >= required;
+    const unlockedAdmin = isAdmin
+      ? true
+      : eligible || hasPosted || successful >= required;
+    const shownSuccessful = isAdmin ? required : successful;
+    const shownRemaining = isAdmin ? 0 : Math.max(0, required - successful);
 
     res.json({
       ok: true,
       required,
-      successful_matches: successful,
-      remaining: Math.max(0, required - successful),
-      unlocked,
-      has_posted: hasPosted,
-      eligible_to_post: eligible,
+      successful_matches: shownSuccessful,
+      remaining: shownRemaining,
+      unlocked: unlockedAdmin,
+      has_posted: isAdmin ? true : hasPosted,
+      eligible_to_post: isAdmin ? true : eligible,
     });
   } catch (err) {
     console.error("[/api/posts/eligibility] failed", err);
@@ -303,25 +374,120 @@ r.post(
   async (req: Request, res: Response) => {
     const auth = req.authUser!;
     const userId = auth.user_id;
+    const previewToken = typeof req.body?.preview_token === "string"
+      ? req.body.preview_token.trim()
+      : "";
+    const crop = parseCrop(req.body);
 
+    if (!req.file && !previewToken) {
+      return res.status(400).json({ ok: false, error: "photo required" });
+    }
+
+    let image_url_orig: string;
+    let image_url_censored: string | null = null;
+    let moderation_status: "PENDING" | "PASSED" | "REJECTED" = "PENDING";
+
+    if (previewToken) {
+      const origRel = `/uploads/orig/${previewToken}`;
+      const origAbs = path.join(ORIG_DIR, previewToken);
+      if (!(await fileExists(origAbs))) {
+        return res.status(400).json({ ok: false, error: "preview_expired" });
+      }
+      image_url_orig = origRel;
+      const base = path.parse(previewToken).name + "_censored.png";
+      const censoredAbs = path.join(CENSORED_DIR, base);
+      if (await fileExists(censoredAbs)) {
+        image_url_censored = `/uploads/censored/${base}`;
+      } else {
+        image_url_censored = null;
+      }
+      moderation_status = "PASSED";
+    } else {
+      // fallback to new upload flow
+      image_url_orig = `/uploads/orig/${req.file!.filename}`;
+      const origAbs = path.join(ORIG_DIR, req.file!.filename);
+      const censoredBase = path.parse(req.file!.filename).name + "_censored.png";
+      const censoredAbs = path.join(CENSORED_DIR, censoredBase);
+      image_url_censored = `/uploads/censored/${censoredBase}`;
+
+      try {
+        await applyCropToFile(origAbs, crop);
+        await censorImage({
+          sourcePath: origAbs,
+          targetPath: censoredAbs,
+        });
+        moderation_status = "PASSED";
+      } catch (err) {
+        console.error("[/api/posts:create] censor failed", err);
+        moderation_status = "PASSED";
+      }
+    }
+
+    try {
+      const [result] = await pool.query(
+        `INSERT INTO Post (user_id, image_url_orig, image_url_censored, moderation_status, status)
+         VALUES (?, ?, ?, ?, ?)`,
+        [
+          userId,
+          image_url_orig,
+          image_url_censored,
+          moderation_status,
+          moderation_status === "PASSED" ? "PUBLISHED" : "PENDING",
+        ]
+      );
+
+      const insertId = (result as ResultSetHeader).insertId;
+      res.status(201).json({
+        ok: true,
+        post_id: insertId,
+        image_url_orig,
+        image_url_censored,
+        moderation_status,
+      });
+    } catch (err) {
+      console.error("[/api/posts:create] insert failed", err);
+      res.status(500).json({ ok: false, error: "create_failed" });
+    }
+  }
+);
+
+r.post(
+  "/posts/preview",
+  requireUser,
+  upload.single("photo"),
+  async (req: Request, res: Response) => {
     if (!req.file) {
       return res.status(400).json({ ok: false, error: "photo required" });
     }
 
-    const image_url_orig = `/uploads/orig/${req.file.filename}`;
+    const origFilename = req.file.filename;
+    const origPath = path.join(ORIG_DIR, origFilename);
+    const censoredBase =
+      path.parse(origFilename).name + "_censored.png";
+    const censoredPath = path.join(CENSORED_DIR, censoredBase);
+    const crop = parseCrop(req.body);
 
     try {
-      const [result] = await pool.query(
-        `INSERT INTO Post (user_id, image_url_orig, moderation_status, status)
-         VALUES (?, ?, 'PASSED', 'PUBLISHED')`,
-        [userId, image_url_orig]
-      );
+      await applyCropToFile(origPath, crop);
+      const { wasCensored, mimeType } = await censorImage({
+        sourcePath: origPath,
+        targetPath: censoredPath,
+      });
 
-      const insertId = (result as ResultSetHeader).insertId;
-      res.status(201).json({ ok: true, post_id: insertId, image_url_orig });
+      const buffer = await fs.readFile(censoredPath);
+      const preview = `data:${mimeType};base64,${buffer.toString("base64")}`;
+
+      return res.json({
+        ok: true,
+        preview,
+        censored: wasCensored,
+        token: origFilename,
+      });
     } catch (err) {
-      console.error("[/api/posts:create] insert failed", err);
-      res.status(500).json({ ok: false, error: "create_failed" });
+      console.error("[/api/posts/preview] failed", err);
+      return res
+        .status(500)
+        .json({ ok: false, error: "preview_failed" });
     }
   }
 );

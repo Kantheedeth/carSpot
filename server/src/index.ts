@@ -17,7 +17,7 @@ import dms from "./routes/dms";
 import settings from "./routes/settings";
 import admin from "./routes/admin";
 import auth from "./routes/auth";
-import { attachAuth } from "./middleware/auth"; 
+import { attachAuth } from "./middleware/auth";
 
 const app = express();                    // ← exactly once
 app.use(cors({ origin: true, credentials: true }));

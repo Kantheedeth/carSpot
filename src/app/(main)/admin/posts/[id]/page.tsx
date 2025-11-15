@@ -1,6 +1,13 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import {
+  use,
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+  ChangeEvent,
+} from "react";
 import Link from "next/link";
 import AdminGuard from "../../AdminGuard";
 
@@ -45,27 +52,40 @@ export default function AdminPostDetail({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
+  const [approveBusy, setApproveBusy] = useState(false);
+  const [moderationError, setModerationError] = useState<string | null>(null);
+  const [moderationMessage, setModerationMessage] = useState<string | null>(null);
+  const [replaceFile, setReplaceFile] = useState<File | null>(null);
+  const [replaceNote, setReplaceNote] = useState("");
+  const [replaceBusy, setReplaceBusy] = useState(false);
+  const [rejectNote, setRejectNote] = useState("");
+  const [rejectBusy, setRejectBusy] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  useEffect(() => {
-    if (!Number.isFinite(postId)) {
-      setNotFound(true);
-      return;
-    }
+  const loadPost = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!Number.isFinite(postId)) {
+        setNotFound(true);
+        setData(null);
+        setLoading(false);
+        return;
+      }
 
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setNotFound(false);
+      setLoading(true);
+      setError(null);
+      setNotFound(false);
 
-    (async () => {
+      const options: RequestInit = {
+        credentials: "include",
+        cache: "no-store",
+      };
+      if (signal) options.signal = signal;
+
       try {
-        const res = await fetch(`${API_BASE}/api/admin/posts/${postId}`, {
-          credentials: "include",
-          cache: "no-store",
-        });
+        const res = await fetch(`${API_BASE}/api/admin/posts/${postId}`, options);
 
         if (res.status === 404) {
-          if (!cancelled) {
+          if (!signal?.aborted) {
             setNotFound(true);
             setData(null);
           }
@@ -77,23 +97,25 @@ export default function AdminPostDetail({
         }
 
         const body: PostResponse = await res.json();
-        if (!cancelled) {
+        if (!signal?.aborted) {
           setData(body);
         }
       } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to load post");
-          setData(null);
-        }
+        if (signal?.aborted) return;
+        setError(err instanceof Error ? err.message : "Failed to load post");
+        setData(null);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!signal?.aborted) setLoading(false);
       }
-    })();
+    },
+    [postId]
+  );
 
-    return () => {
-      cancelled = true;
-    };
-  }, [postId]);
+  useEffect(() => {
+    const controller = new AbortController();
+    loadPost(controller.signal);
+    return () => controller.abort();
+  }, [loadPost]);
 
   const post = data?.post;
   const ratings = data?.ratings ?? [];
@@ -101,6 +123,117 @@ export default function AdminPostDetail({
   const resolveImage = (path: string | null) => {
     if (!path) return null;
     return path.startsWith("/") ? `${ORIGIN}${path}` : `${ORIGIN}/${path}`;
+  };
+
+  const handleApprove = async () => {
+    if (!post || approveBusy) return;
+    setApproveBusy(true);
+    setModerationError(null);
+    setModerationMessage(null);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/posts/${post.post_id}/approve`, {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: "" }),
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          (payload as { error?: string } | null)?.error || "Failed to approve post"
+        );
+      }
+      await loadPost();
+      setModerationMessage("Post approved and flags cleared.");
+    } catch (err) {
+      setModerationError(
+        err instanceof Error ? err.message : "Failed to approve post"
+      );
+    } finally {
+      setApproveBusy(false);
+    }
+  };
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    setReplaceFile(file ?? null);
+  };
+
+  const handleReplace = async () => {
+    if (!post || replaceBusy) return;
+    if (!replaceFile) {
+      setModerationError("Select an image to upload.");
+      return;
+    }
+    setReplaceBusy(true);
+    setModerationError(null);
+    setModerationMessage(null);
+
+    try {
+      const form = new FormData();
+      form.append("censored", replaceFile);
+      if (replaceNote.trim()) form.append("note", replaceNote.trim());
+
+      const res = await fetch(`${API_BASE}/api/admin/posts/${post.post_id}/censored`, {
+        method: "POST",
+        credentials: "include",
+        body: form,
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          (payload as { error?: string } | null)?.error || "Failed to replace image"
+        );
+      }
+      await loadPost();
+      setModerationMessage("Censored image updated.");
+      setReplaceFile(null);
+      setReplaceNote("");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    } catch (err) {
+      setModerationError(
+        err instanceof Error ? err.message : "Failed to replace image"
+      );
+    } finally {
+      setReplaceBusy(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!post || rejectBusy) return;
+    if (!rejectNote.trim()) {
+      setModerationError("Add a short note explaining the rejection.");
+      return;
+    }
+    setRejectBusy(true);
+    setModerationError(null);
+    setModerationMessage(null);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/posts/${post.post_id}/reject`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: rejectNote.trim() }),
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          (payload as { error?: string } | null)?.error || "Failed to reject post"
+        );
+      }
+      await loadPost();
+      setModerationMessage("Post rejected.");
+      setRejectNote("");
+    } catch (err) {
+      setModerationError(
+        err instanceof Error ? err.message : "Failed to reject post"
+      );
+    } finally {
+      setRejectBusy(false);
+    }
   };
 
   return (
@@ -180,8 +313,72 @@ export default function AdminPostDetail({
             <div className="space-y-6">
               <div className="rounded-2xl border border-white/10 bg-neutral-900/60 p-4">
                 <div className="mb-2 text-sm font-semibold text-white">Moderation</div>
-                <div className="text-sm text-white/60">
-                  Moderation actions will be wired up soon. For now this panel is read-only.
+                <div className="space-y-4 text-sm text-white/70">
+                  <p>
+                    Approve once the content looks safe. You can also upload a corrected censored image or reject the post entirely.
+                  </p>
+                  {moderationError && (
+                    <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
+                      {moderationError}
+                    </div>
+                  )}
+                  {moderationMessage && (
+                    <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100">
+                      {moderationMessage}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleApprove}
+                    disabled={approveBusy || post.moderation_status === "PASSED"}
+                    className="w-full rounded-xl bg-emerald-500/20 px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {approveBusy ? "Approving…" : "Approve & Clear Flags"}
+                  </button>
+
+                  <div className="space-y-2 rounded-xl border border-white/10 bg-black/20 p-3 text-xs text-white/70">
+                    <p className="text-sm font-semibold text-white">Replace Censored Image</p>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleFileChange}
+                      className="block w-full text-xs text-white/70 file:mr-2 file:rounded file:border-0 file:bg-white/10 file:px-3 file:py-1.5 file:text-white file:text-xs"
+                    />
+                    <input
+                      type="text"
+                      value={replaceNote}
+                      onChange={(e) => setReplaceNote(e.target.value)}
+                      placeholder="Optional note"
+                      className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleReplace}
+                      disabled={replaceBusy || !replaceFile}
+                      className="w-full rounded-lg bg-white/10 px-3 py-2 text-sm font-semibold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {replaceBusy ? "Uploading…" : "Upload & Replace"}
+                    </button>
+                  </div>
+
+                  <div className="space-y-2 rounded-xl border border-white/10 bg-black/20 p-3 text-xs text-white/70">
+                    <p className="text-sm font-semibold text-white">Reject Post</p>
+                    <textarea
+                      value={rejectNote}
+                      onChange={(e) => setRejectNote(e.target.value)}
+                      className="h-24 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white"
+                      placeholder="Explain why the post is rejected..."
+                    />
+                    <button
+                      type="button"
+                      onClick={handleReject}
+                      disabled={rejectBusy}
+                      className="w-full rounded-lg bg-rose-500/20 px-3 py-2 text-sm font-semibold text-rose-100 transition hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {rejectBusy ? "Rejecting…" : "Reject Post"}
+                    </button>
+                  </div>
                 </div>
               </div>
 

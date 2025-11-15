@@ -1,4 +1,12 @@
-// src/lib/api.ts
+class ApiError extends Error {
+  status?: number;
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 export async function api<T>(
   path: string,
   init: RequestInit = {}
@@ -32,9 +40,7 @@ export async function api<T>(
     } catch {
       message = text;
     }
-    const error = new Error(message || `API ${res.status}`);
-    (error as any).status = res.status;
-    throw error;
+    throw new ApiError(message || `API ${res.status}`, res.status);
   }
 
   // handle empty response body gracefully

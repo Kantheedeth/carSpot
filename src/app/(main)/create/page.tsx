@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import Cropper from "react-easy-crop";
+import "react-easy-crop/react-easy-crop.css";
 import { useRouter } from "next/navigation";
 
-type Stage = "idle" | "scanning" | "censored";
-type Box = { x: number; y: number; w: number; h: number };
+type Stage = "idle" | "cropping" | "scanning" | "censored";
 
 type GateData = {
   unlocked: boolean;
@@ -166,60 +167,134 @@ function CreateFlow({
 }) {
   const [stage, setStage] = useState<Stage>("idle");
   const [fileUrl, setFileUrl] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [progress, setProgress] = useState<number>(0);
-  const [boxes, setBoxes] = useState<Box[]>([]);
+  const [previewCensored, setPreviewCensored] = useState(false);
+  const [previewToken, setPreviewToken] = useState<string | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [crop, setCrop] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [croppedPixels, setCroppedPixels] = useState<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>(null);
   const router = useRouter();
 
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
     setFile(f);
+    setConfirm(false);
     const url = URL.createObjectURL(f);
     setFileUrl(url);
-    fakeScan();
+    setPreviewUrl(null);
+    setPreviewToken(null);
+    setPreviewCensored(false);
+    setCrop({ x: 0, y: 0 });
+    setZoom(1);
+    setCroppedPixels(null);
+    setStage("cropping");
   }
 
-  function fakeScan() {
+  async function runScan(target: File) {
+    if (!croppedPixels) {
+      setScanError("Adjust the crop before scanning.");
+      return;
+    }
     setStage("scanning");
     setProgress(0);
-    setBoxes([]);
-    let pct = 0;
-    const id = setInterval(() => {
-      pct += Math.random() * 18 + 8;
-      if (pct >= 100) {
-        pct = 100;
-        clearInterval(id);
-        setBoxes([{ x: 62, y: 60, w: 20, h: 10 }]);
-        setStage("censored");
+    setPreviewCensored(false);
+    setScanError(null);
+    setPreviewToken(null);
+    const timer = setInterval(() => {
+      setProgress((prev) =>
+        prev >= 95 ? prev : Math.min(95, prev + Math.random() * 12 + 6)
+      );
+    }, 180);
+    try {
+      const form = new FormData();
+      form.append("photo", target);
+      form.append("crop_x", String(Math.round(croppedPixels.x)));
+      form.append("crop_y", String(Math.round(croppedPixels.y)));
+      form.append("crop_width", String(Math.round(croppedPixels.width)));
+      form.append("crop_height", String(Math.round(croppedPixels.height)));
+      const res = await fetch(`${apiBase}/api/posts/preview`, {
+        method: "POST",
+        credentials: "include",
+        body: form,
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload?.ok || !payload.preview) {
+        throw new Error(
+          (payload as { error?: string } | null)?.error ||
+            "Unable to scan this image."
+        );
       }
-      setProgress(Math.round(pct));
-    }, 200);
+      setPreviewUrl(payload.preview);
+      setPreviewCensored(Boolean(payload.censored));
+      setPreviewToken(typeof payload.token === "string" ? payload.token : null);
+      setProgress(100);
+      setStage("censored");
+    } catch (err) {
+      console.error("scan failed", err);
+      setScanError(
+        err instanceof Error ? err.message : "Unable to scan this image."
+      );
+      setPreviewUrl(null);
+      setPreviewToken(null);
+      setStage("cropping");
+    } finally {
+      clearInterval(timer);
+    }
   }
 
   function resetAll() {
     setStage("idle");
+    setFile(null);
     setFileUrl(null);
+    setPreviewUrl(null);
     setProgress(0);
-    setBoxes([]);
+    setPreviewCensored(false);
+    setPreviewToken(null);
+    setCrop({ x: 0, y: 0 });
+    setZoom(1);
+    setCroppedPixels(null);
+    setScanError(null);
     setConfirm(false);
     setSubmitError(null);
     if (inputRef.current) inputRef.current.value = "";
   }
 
   async function handlePublish() {
-    if (!(stage === "censored" && confirm) || !file) return;
+    if (!(stage === "censored" && confirm)) return;
+    if (!previewToken && !file) {
+      setSubmitError("Upload and scan a photo first.");
+      return;
+    }
 
     try {
       setSubmitting(true);
       setSubmitError(null);
 
       const fd = new FormData();
-      fd.append("photo", file);
+      if (previewToken) {
+        fd.append("preview_token", previewToken);
+      } else if (file) {
+        fd.append("photo", file);
+        if (croppedPixels) {
+          fd.append("crop_x", String(Math.round(croppedPixels.x)));
+          fd.append("crop_y", String(Math.round(croppedPixels.y)));
+          fd.append("crop_width", String(Math.round(croppedPixels.width)));
+          fd.append("crop_height", String(Math.round(croppedPixels.height)));
+        }
+      }
 
       const res = await fetch(`${apiBase}/api/posts`, {
         method: "POST",
@@ -296,32 +371,65 @@ function CreateFlow({
             </div>
           )}
 
-          {stage === "censored" && fileUrl && (
+          {stage === "cropping" && fileUrl && (
+            <div className="relative h-[420px] w-full bg-black">
+              <Cropper
+                image={fileUrl}
+                crop={crop}
+                zoom={zoom}
+                aspect={4 / 3}
+                onCropChange={setCrop}
+                onZoomChange={setZoom}
+                onCropComplete={(_, pixels) =>
+                  setCroppedPixels({
+                    x: pixels.x,
+                    y: pixels.y,
+                    width: pixels.width,
+                    height: pixels.height,
+                  })
+                }
+                showGrid={false}
+                restrictPosition
+              />
+            </div>
+          )}
+
+          {stage === "censored" && (previewUrl || fileUrl) && (
             <div className="relative">
               <img
-                src={fileUrl}
+                src={previewUrl ?? fileUrl ?? ""}
                 alt="preview"
                 className="h-[420px] w-full object-cover"
-                style={{ filter: "blur(1.6px) brightness(0.98)" }}
               />
-              <div className="pointer-events-none absolute inset-0">
-                {boxes.map((b, i) => (
-                  <div
-                    key={i}
-                    className="absolute rounded-md border border-white/20 bg-black/20 backdrop-blur-lg"
-                    style={{
-                      left: `${b.x}%`,
-                      top: `${b.y}%`,
-                      width: `${b.w}%`,
-                      height: `${b.h}%`,
-                    }}
-                    title="auto-censored area"
-                  />
-                ))}
-              </div>
+              {!previewCensored && (
+                <div className="absolute inset-x-0 bottom-0 bg-black/70 px-4 py-3 text-xs text-white/80">
+                  AI preview did not detect a license plate—double-check this photo before publishing.
+                </div>
+              )}
             </div>
           )}
         </div>
+
+        {stage === "cropping" && fileUrl && (
+          <div className="mt-3 space-y-2 text-sm text-white/80">
+            <div>Adjust the frame, then scan to lock in the crop.</div>
+            <input
+              type="range"
+              min={1}
+              max={3}
+              step={0.05}
+              value={zoom}
+              onChange={(e) => setZoom(Number(e.target.value))}
+              className="w-full"
+            />
+          </div>
+        )}
+
+        {scanError && (
+          <div className="mt-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
+            {scanError}
+          </div>
+        )}
 
         <input
           id="file"
@@ -340,14 +448,33 @@ function CreateFlow({
             {stage === "idle" ? "Choose photo" : "Change photo"}
           </button>
 
-          {stage !== "idle" && (
+          {stage === "cropping" && file ? (
             <button
-              onClick={fakeScan}
+              onClick={() => runScan(file)}
+              className="rounded-lg border border-white/15 bg-emerald-500/20 px-3 py-2 text-sm text-white hover:bg-emerald-500/30"
+            >
+              Scan selection
+            </button>
+          ) : stage === "scanning" ? (
+            <button
+              disabled
+              className="rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm text-white/60"
+            >
+              Scanning…
+            </button>
+          ) : stage === "censored" ? (
+            <button
+              onClick={() => {
+                setStage("cropping");
+                setPreviewUrl(null);
+                setPreviewToken(null);
+                setPreviewCensored(false);
+              }}
               className="rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm text-white hover:bg-white/10"
             >
-              Re-scan
+              Adjust crop
             </button>
-          )}
+          ) : null}
         </div>
 
         {stage === "censored" && (

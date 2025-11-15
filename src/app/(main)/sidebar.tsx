@@ -1,16 +1,41 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useSession } from "@/lib/usuSession";
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { user, isAuthed, isAdmin } = useSession();
+  const [loggingOut, setLoggingOut] = useState(false);
 
   // for now, until you have /me, fall back to /u/{user_id} or /u/1
   const profileHref = user ? `/u/${user.user_id}` : "/login";
+  const apiBase = (process.env.NEXT_PUBLIC_API_BASE || "").replace(/\/+$/, "");
+  const logoutEndpoint = apiBase
+    ? `${apiBase}/api/auth/logout`
+    : "/api/auth/logout";
+
+  async function handleLogout() {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await fetch(logoutEndpoint, {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+      });
+    } catch (err) {
+      console.error("logout failed", err);
+    } finally {
+      setLoggingOut(false);
+      router.push("/login");
+      router.refresh();
+    }
+  }
 
   return (
     <aside
@@ -101,6 +126,13 @@ export default function Sidebar() {
                   label="Profile"
                   pathname={pathname}
                 />
+                <NavItem
+                  iconSrc="/logout.svg"
+                  label={loggingOut ? "Logging out…" : "Logout"}
+                  pathname={pathname}
+                  onClick={handleLogout}
+                  disabled={loggingOut}
+                />
               </>
             )}
           </nav>
@@ -121,28 +153,31 @@ function NavItem({
   label,
   pathname,
   isHighlighted = false,
+  onClick,
+  disabled = false,
 }: {
-  href: string;
+  href?: string;
   iconSrc: string;
   label: string;
   pathname: string | null;
   isHighlighted?: boolean;
+  onClick?: () => void;
+  disabled?: boolean;
 }) {
   const active =
-    pathname === href ||
-    (href !== "/" && pathname?.startsWith(href + "/"));
+    !!href &&
+    (pathname === href ||
+      (href !== "/" && pathname?.startsWith(href + "/")));
 
-  return (
-    <Link
-      href={href}
-      title={label}
-      aria-label={label}
-      className="
-        relative flex items-center gap-3 rounded-xl px-2 py-2 text-white/80
-        hover:bg-white/5 hover:text-white transition-colors
-      "
-    >
-      {active && (
+  const baseClass = `
+    relative flex items-center gap-3 rounded-xl px-2 py-2 text-white/80
+    hover:bg-white/5 hover:text-white transition-colors
+    ${disabled ? "cursor-not-allowed opacity-50" : ""}
+  `;
+
+  const content = (
+    <>
+      {active && !onClick && (
         <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r bg-lime-400" />
       )}
 
@@ -161,6 +196,27 @@ function NavItem({
       <span className="ml-1 hidden truncate text-[15px] font-medium group-hover:block">
         {label}
       </span>
+    </>
+  );
+
+  if (onClick || !href) {
+    return (
+      <button
+        type="button"
+        title={label}
+        aria-label={label}
+        onClick={onClick}
+        disabled={disabled}
+        className={`${baseClass} w-full text-left`}
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return (
+    <Link href={href} title={label} aria-label={label} className={baseClass}>
+      {content}
     </Link>
   );
 }

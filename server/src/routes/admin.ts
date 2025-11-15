@@ -1,10 +1,37 @@
 import { Router, Request, Response } from "express";
+import path from "path";
+import fs from "fs";
+import multer from "multer";
 import type { RowDataPacket } from "mysql2";
 import { pool } from "../models/db";
 import { requireAdmin } from "../middleware/auth";
+import { CENSORED_DIR } from "../path";
 
 const r = Router();
 let cachedAdminRoleId: number | null = null;
+
+const censoredStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, CENSORED_DIR),
+  filename: (_req, file, cb) =>
+    cb(
+      null,
+      `${Date.now()}_${file.originalname
+        .replace(/\s+/g, "")
+        .replace(/[^\w.\-]/g, "")}`
+    ),
+});
+
+const uploadCensored = multer({
+  storage: censoredStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (![".jpg", ".jpeg", ".png", ".webp"].includes(ext)) {
+      return cb(new Error("Only jpg/png/webp images allowed"));
+    }
+    cb(null, true);
+  },
+});
 
 async function getAdminRoleId(): Promise<number> {
   if (cachedAdminRoleId !== null) return cachedAdminRoleId;
@@ -24,6 +51,7 @@ type SummaryRow = RowDataPacket & {
   pending_moderation: number;
   new_users_7d: number;
   new_posts_7d: number;
+  active_posts: number;
 };
 
 type QueueRow = RowDataPacket & {
@@ -94,6 +122,7 @@ const summarySql = `
     (SELECT COUNT(*) FROM Post) AS total_posts,
     (SELECT COUNT(*) FROM User WHERE status = 'ACTIVE') AS active_users,
     (SELECT COUNT(*) FROM Post WHERE moderation_status = 'PENDING') AS pending_moderation,
+    (SELECT COUNT(*) FROM Post WHERE status = 'PUBLISHED' AND moderation_status = 'PASSED') AS active_posts,
     (SELECT COUNT(*) FROM User WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)) AS new_users_7d,
     (SELECT COUNT(*) FROM Post WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)) AS new_posts_7d
 `;
@@ -105,6 +134,7 @@ r.get("/admin/dashboard", requireAdmin, async (_req: Request, res: Response) => 
       total_posts: 0,
       active_users: 0,
       pending_moderation: 0,
+      active_posts: 0,
       new_users_7d: 0,
       new_posts_7d: 0,
     };
@@ -166,6 +196,7 @@ r.get("/admin/dashboard", requireAdmin, async (_req: Request, res: Response) => 
         total_posts: Number(summary.total_posts) || 0,
         active_users: Number(summary.active_users) || 0,
         pending_reviews: Number(summary.pending_moderation) || 0,
+        active_posts: Number(summary.active_posts) || 0,
         new_users_7d: Number(summary.new_users_7d) || 0,
         new_posts_7d: Number(summary.new_posts_7d) || 0,
       },
@@ -203,6 +234,110 @@ r.get("/admin/dashboard", requireAdmin, async (_req: Request, res: Response) => 
     res.status(500).json({ ok: false, error: "dashboard_load_failed" });
   }
 });
+
+r.post(
+  "/admin/posts/:id/approve",
+  requireAdmin,
+  async (req: Request, res: Response) => {
+    const postId = Number(req.params.id);
+    if (!Number.isFinite(postId) || postId <= 0) {
+      return res.status(400).json({ ok: false, error: "invalid_post_id" });
+    }
+
+    const adminId = req.authUser!.user_id;
+    const note =
+      typeof req.body?.note === "string" && req.body.note.trim().length > 0
+        ? req.body.note.trim()
+        : null;
+
+    try {
+      await pool.query("CALL sp_moderation_pass(?, ?, ?)", [
+        postId,
+        adminId,
+        note,
+      ]);
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("[POST /api/admin/posts/:id/approve]", err);
+      return res
+        .status(500)
+        .json({ ok: false, error: "moderation_approve_failed" });
+    }
+  }
+);
+
+r.post(
+  "/admin/posts/:id/reject",
+  requireAdmin,
+  async (req: Request, res: Response) => {
+    const postId = Number(req.params.id);
+    if (!Number.isFinite(postId) || postId <= 0) {
+      return res.status(400).json({ ok: false, error: "invalid_post_id" });
+    }
+
+    const adminId = req.authUser!.user_id;
+    const note =
+      typeof req.body?.note === "string" && req.body.note.trim().length > 0
+        ? req.body.note.trim()
+        : null;
+
+    try {
+      await pool.query("CALL sp_moderation_reject(?, ?, ?)", [
+        postId,
+        adminId,
+        note,
+      ]);
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("[POST /api/admin/posts/:id/reject]", err);
+      return res
+        .status(500)
+        .json({ ok: false, error: "moderation_reject_failed" });
+    }
+  }
+);
+
+r.post(
+  "/admin/posts/:id/censored",
+  requireAdmin,
+  uploadCensored.single("censored"),
+  async (req: Request, res: Response) => {
+    const postId = Number(req.params.id);
+    if (!Number.isFinite(postId) || postId <= 0) {
+      if (req.file) {
+        fs.unlink(req.file.path, () => undefined);
+      }
+      return res.status(400).json({ ok: false, error: "invalid_post_id" });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ ok: false, error: "file_required" });
+    }
+
+    const adminId = req.authUser!.user_id;
+    const relPath = `/uploads/censored/${req.file.filename}`;
+    const note =
+      typeof req.body?.note === "string" && req.body.note.trim().length > 0
+        ? req.body.note.trim()
+        : null;
+
+    try {
+      await pool.query("CALL sp_moderation_replace_censored(?, ?, ?, ?)", [
+        postId,
+        adminId,
+        relPath,
+        note,
+      ]);
+      return res.json({ ok: true, image_url_censored: relPath });
+    } catch (err) {
+      fs.unlink(req.file.path, () => undefined);
+      console.error("[POST /api/admin/posts/:id/censored]", err);
+      return res
+        .status(500)
+        .json({ ok: false, error: "moderation_replace_failed" });
+    }
+  }
+);
 
 r.get("/admin/posts", requireAdmin, async (req: Request, res: Response) => {
   const page = Math.max(1, Number(req.query.page) || 1);

@@ -11,6 +11,7 @@ type DashboardSummary = {
   total_posts: number;
   active_users: number;
   pending_reviews: number;
+  active_posts: number;
   new_users_7d: number;
   new_posts_7d: number;
 };
@@ -188,9 +189,9 @@ export default function AdminDashboard() {
   const stats = useMemo(
     () => [
       { label: "Total Posts", value: summary?.total_posts ?? "—" },
+      { label: "Active Posts", value: summary?.active_posts ?? "—" },
+      { label: "Pending Posts", value: summary?.pending_reviews ?? "—" },
       { label: "Active Users", value: summary?.active_users ?? "—" },
-      { label: "New Users (7d)", value: summary?.new_users_7d ?? "—" },
-      { label: "New Posts (7d)", value: summary?.new_posts_7d ?? "—" },
     ],
     [summary]
   );

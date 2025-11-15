@@ -5,10 +5,7 @@ import { requireUser } from "../middleware/auth";
 
 const r = Router();
 
-type SettingRow = RowDataPacket & { v: string };
-type TargetRow = RowDataPacket & { user_id: number; status: string };
-type ConversationRow = RowDataPacket & { conversation_id: number };
-type FollowRow = RowDataPacket & { follower_id: number; following_id: number };
+type ConversationIdRow = RowDataPacket & { conversation_id: number | null };
 type InboxRow = RowDataPacket & {
   conversation_id: number;
   other_user_id: number;
@@ -29,12 +26,6 @@ type MessageRow = RowDataPacket & {
   sender_display_name: string | null;
   sender_profile_pic_url: string | null;
 };
-
-function parseBool(value: string | null | undefined): boolean {
-  if (!value) return false;
-  const normalized = value.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
 
 async function isParticipant(conversationId: number, userId: number) {
   const [rows] = await pool.query<ParticipantRow[]>(
@@ -133,99 +124,38 @@ r.post("/dm/start", requireUser, async (req: Request, res: Response) => {
 
   const conn = await pool.getConnection();
   try {
-    await conn.beginTransaction();
-
-    const [targetRows] = await conn.query<TargetRow[]>(
-      "SELECT user_id, status FROM `User` WHERE user_id = ? LIMIT 1",
-      [targetId]
+    await conn.query("SET @dm_conversation_id := NULL");
+    await conn.query("CALL sp_start_dm(?, ?, @dm_conversation_id)", [
+      userId,
+      targetId,
+    ]);
+    const [outRows] = await conn.query<ConversationIdRow[]>(
+      "SELECT @dm_conversation_id AS conversation_id"
     );
-
-    if (targetRows.length === 0) {
-      await conn.rollback();
-      return res.status(404).json({ ok: false, error: "target_not_found" });
+    const conversationId = outRows[0]?.conversation_id;
+    if (!conversationId) {
+      throw new Error("conversation_not_created");
     }
+    return res.json({ ok: true, conversation_id: conversationId });
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message || "" : String(err ?? "");
+    const normalized = message.toLowerCase();
 
-    if (targetRows[0].status !== "ACTIVE") {
-      await conn.rollback();
+    if (normalized.includes("cannot dm yourself")) {
+      return res.status(400).json({ ok: false, error: "cannot_dm_self" });
+    }
+    if (normalized.includes("not active")) {
       return res
         .status(403)
         .json({ ok: false, error: "target_not_available" });
     }
-
-    const [settingRows] = await conn.query<SettingRow[]>(
-      "SELECT v FROM AppSetting WHERE k = 'require_mutual_follow_for_dm' LIMIT 1"
-    );
-    const requireMutual =
-      settingRows.length === 0 ? true : parseBool(settingRows[0].v);
-
-    if (requireMutual) {
-      const [follows] = await conn.query<FollowRow[]>(
-        `
-          SELECT follower_id, following_id
-          FROM Follow
-          WHERE (follower_id = ? AND following_id = ?)
-             OR (follower_id = ? AND following_id = ?)
-        `,
-        [userId, targetId, targetId, userId]
-      );
-
-      const userFollows = follows.some(
-        (row) => row.follower_id === userId && row.following_id === targetId
-      );
-      const targetFollows = follows.some(
-        (row) => row.follower_id === targetId && row.following_id === userId
-      );
-
-      if (!userFollows || !targetFollows) {
-        await conn.rollback();
-        return res
-          .status(403)
-          .json({ ok: false, error: "mutual_follow_required" });
-      }
+    if (normalized.includes("mutual follow")) {
+      return res
+        .status(403)
+        .json({ ok: false, error: "mutual_follow_required" });
     }
 
-    const [existing] = await conn.query<ConversationRow[]>(
-      `
-        SELECT cp1.conversation_id
-        FROM ConversationParticipant cp1
-        JOIN ConversationParticipant cp2
-          ON cp1.conversation_id = cp2.conversation_id
-        WHERE cp1.user_id = ? AND cp2.user_id = ?
-        ORDER BY cp1.conversation_id ASC
-        LIMIT 1
-      `,
-      [userId, targetId]
-    );
-
-    let conversationId: number;
-    let created = false;
-
-    if (existing.length > 0) {
-      conversationId = existing[0].conversation_id;
-    } else {
-      const [convResult] = await conn.query<ResultSetHeader>(
-        "INSERT INTO Conversation (created_at) VALUES (NOW())"
-      );
-      conversationId = convResult.insertId;
-
-      await conn.query(
-        `
-          INSERT INTO ConversationParticipant (conversation_id, user_id)
-          VALUES (?, ?), (?, ?)
-        `,
-        [conversationId, userId, conversationId, targetId]
-      );
-      created = true;
-    }
-
-    await conn.commit();
-    return res.json({ ok: true, conversation_id: conversationId, created });
-  } catch (err) {
-    try {
-      await conn.rollback();
-    } catch {
-      // ignore rollback failures
-    }
     console.error("[POST /api/dm/start]", err);
     return res.status(500).json({ ok: false, error: "dm_start_failed" });
   } finally {

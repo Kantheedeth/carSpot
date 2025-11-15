@@ -85,6 +85,13 @@ router.get("/auth/guest", (_req: Request, res: Response) => {
     .json({ ok: true, mode: "guest" });
 });
 
+router.post("/auth/logout", (_req: Request, res: Response) => {
+  res
+    .clearCookie("carspot_token", httpOnlyBase)
+    .clearCookie("carspot_guest_ui", clientBase)
+    .json({ ok: true, mode: "logged_out" });
+});
+
 /* ---------- SIGNUP (plain password) ---------- */
 /*
   POST /api/auth/signup
