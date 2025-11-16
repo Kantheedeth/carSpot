@@ -348,6 +348,7 @@ r.get("/admin/posts", requireAdmin, async (req: Request, res: Response) => {
   const moderation =
     typeof req.query.moderation === "string" ? req.query.moderation : null;
   const search = String(req.query.search || "").trim();
+  const sortParam = typeof req.query.sort === "string" ? req.query.sort : "created_desc";
 
   const where: string[] = [];
   const params: Array<string | number> = [];
@@ -371,6 +372,14 @@ r.get("/admin/posts", requireAdmin, async (req: Request, res: Response) => {
   const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
   try {
+    const orderByMap: Record<string, string> = {
+      created_desc: "p.created_at DESC",
+      created_asc: "p.created_at ASC",
+      ratings_desc: "p.rating_count DESC",
+      ratings_asc: "p.rating_count ASC",
+    };
+    const orderBy = orderByMap[sortParam] || orderByMap.created_desc;
+
     const baseQuery = `
       FROM Post p
       JOIN User u ON u.user_id = p.user_id
@@ -391,7 +400,7 @@ r.get("/admin/posts", requireAdmin, async (req: Request, res: Response) => {
           p.score_sum,
           p.created_at
         ${baseQuery}
-        ORDER BY p.created_at DESC
+        ORDER BY ${orderBy}
         LIMIT ? OFFSET ?
       `,
       [...params, limit, offset]
@@ -433,6 +442,9 @@ r.get("/admin/users", requireAdmin, async (req: Request, res: Response) => {
   const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
   const offset = (page - 1) * limit;
   const search = String(req.query.search || "").trim();
+  const statusFilter =
+    typeof req.query.status === "string" ? req.query.status : null;
+  const sortParam = typeof req.query.sort === "string" ? req.query.sort : "created_desc";
 
   const where: string[] = [];
   const params: Array<string | number> = [];
@@ -443,9 +455,22 @@ r.get("/admin/users", requireAdmin, async (req: Request, res: Response) => {
     params.push(like, like, search);
   }
 
+  if (statusFilter) {
+    where.push("u.status = ?");
+    params.push(statusFilter);
+  }
+
   const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
   try {
+    const orderByMap: Record<string, string> = {
+      created_desc: "u.created_at DESC",
+      created_asc: "u.created_at ASC",
+      posts_desc: "IFNULL(v.post_count,0) DESC",
+      posts_asc: "IFNULL(v.post_count,0) ASC",
+    };
+    const orderBy = orderByMap[sortParam] || orderByMap.created_desc;
+
     const baseQuery = `
       FROM User u
       LEFT JOIN vuserstats v ON v.user_id = u.user_id
@@ -475,7 +500,7 @@ r.get("/admin/users", requireAdmin, async (req: Request, res: Response) => {
             WHERE ur.user_id = u.user_id AND r.name = 'ADMIN'
           ) AS is_admin
         ${baseQuery}
-        ORDER BY u.created_at DESC
+        ORDER BY ${orderBy}
         LIMIT ? OFFSET ?
       `,
       [...params, limit, offset]

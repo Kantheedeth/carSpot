@@ -8,6 +8,7 @@ import { pool } from "../models/db";
 import { ORIG_DIR, CENSORED_DIR } from "../path";
 import { requireUser } from "../middleware/auth";
 import { censorImage } from "../services/censor";
+import { detectCarPresence } from "../services/detectCar";
 
 const r = Router();
 
@@ -17,6 +18,14 @@ async function fileExists(pathname: string) {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function deleteIfExists(pathname: string) {
+  try {
+    await fs.unlink(pathname);
+  } catch {
+    // ignore
   }
 }
 
@@ -412,6 +421,12 @@ r.post(
 
       try {
         await applyCropToFile(origAbs, crop);
+        const hasCar = await detectCarPresence(origAbs);
+        if (!hasCar) {
+          await deleteIfExists(origAbs);
+          await deleteIfExists(censoredAbs);
+          return res.status(422).json({ ok: false, error: "car_not_detected" });
+        }
         await censorImage({
           sourcePath: origAbs,
           targetPath: censoredAbs,
@@ -462,17 +477,23 @@ r.post(
 
     const origFilename = req.file.filename;
     const origPath = path.join(ORIG_DIR, origFilename);
-    const censoredBase =
+  const censoredBase =
       path.parse(origFilename).name + "_censored.png";
-    const censoredPath = path.join(CENSORED_DIR, censoredBase);
-    const crop = parseCrop(req.body);
+  const censoredPath = path.join(CENSORED_DIR, censoredBase);
+  const crop = parseCrop(req.body);
 
-    try {
-      await applyCropToFile(origPath, crop);
-      const { wasCensored, mimeType } = await censorImage({
-        sourcePath: origPath,
-        targetPath: censoredPath,
-      });
+  try {
+    await applyCropToFile(origPath, crop);
+    const hasCar = await detectCarPresence(origPath);
+    if (!hasCar) {
+      await deleteIfExists(origPath);
+      await deleteIfExists(censoredPath);
+      return res.status(422).json({ ok: false, error: "car_not_detected" });
+    }
+    const { wasCensored, mimeType } = await censorImage({
+      sourcePath: origPath,
+      targetPath: censoredPath,
+    });
 
       const buffer = await fs.readFile(censoredPath);
       const preview = `data:${mimeType};base64,${buffer.toString("base64")}`;

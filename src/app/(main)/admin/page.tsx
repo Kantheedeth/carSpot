@@ -72,6 +72,7 @@ export default function AdminDashboard() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [userLoading, setUserLoading] = useState(true);
   const [userError, setUserError] = useState<string | null>(null);
+  const [userSearch, setUserSearch] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -145,6 +146,14 @@ export default function AdminDashboard() {
   const queue = data?.queue ?? [];
   const ratings = data?.ratings ?? [];
   const activity = data?.user_activity ?? [];
+  const filteredUsers = useMemo(() => {
+    const term = userSearch.trim().toLowerCase();
+    if (!term) return users;
+    return users.filter((user) => {
+      const name = user.display_name?.toLowerCase() ?? "";
+      return name.includes(term) || String(user.user_id).includes(term);
+    });
+  }, [userSearch, users]);
 
   async function mutateUser(
     userId: number,
@@ -348,6 +357,13 @@ export default function AdminDashboard() {
                 View vuserstats and grant admin or delete accounts.
               </p>
             </div>
+            <input
+              type="search"
+              placeholder="Search by name or ID…"
+              value={userSearch}
+              onChange={(e) => setUserSearch(e.target.value)}
+              className="mt-2 min-w-[200px] rounded-lg bg-black/30 px-3 py-1.5 text-sm text-white placeholder:text-white/50 sm:mt-0"
+            />
           </div>
           {userError && (
             <div className="px-4 py-3 text-sm text-rose-200">{userError}</div>
@@ -373,14 +389,14 @@ export default function AdminDashboard() {
                       Loading users…
                     </td>
                   </tr>
-                ) : users.length === 0 ? (
+                ) : filteredUsers.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="px-3 py-6 text-center text-white/60">
-                      No users found.
+                      No users match the search.
                     </td>
                   </tr>
                 ) : (
-                  users.map((user) => (
+                  filteredUsers.map((user) => (
                     <tr key={user.user_id} className="text-white/80">
                       <td className="px-3 py-2">
                         <div className="font-semibold">

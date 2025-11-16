@@ -231,6 +231,11 @@ function CreateFlow({
         body: form,
       });
       const payload = await res.json().catch(() => null);
+      if (res.status === 422 && payload?.error === "car_not_detected") {
+        window.alert("No car detected in this photo. Please try another image.");
+        resetAll();
+        return;
+      }
       if (!res.ok || !payload?.ok || !payload.preview) {
         throw new Error(
           (payload as { error?: string } | null)?.error ||
@@ -303,6 +308,11 @@ function CreateFlow({
       });
 
       const payload = await res.json().catch(() => null);
+      if (res.status === 422 && payload?.error === "car_not_detected") {
+        setSubmitError("No car detected in this photo. Please try another image.");
+        resetAll();
+        return;
+      }
       if (!res.ok || !payload) {
         const msg =
           (payload as { message?: string; error?: string })?.message ||

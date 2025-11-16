@@ -32,6 +32,20 @@ export default function AdminPosts() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState("");
+  const [moderationFilter, setModerationFilter] = useState(""
+  );
+  const [sort, setSort] = useState("created_desc");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setSearch(searchInput.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(id);
+  }, [searchInput]);
 
   const totalPages = useMemo(() => {
     if (!data) return 1;
@@ -45,7 +59,14 @@ export default function AdminPosts() {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`${API_BASE}/api/admin/posts?page=${page}`, {
+        const params = new URLSearchParams();
+        params.set("page", String(page));
+        if (statusFilter) params.set("status", statusFilter);
+        if (moderationFilter) params.set("moderation", moderationFilter);
+        if (search) params.set("search", search);
+        if (sort) params.set("sort", sort);
+
+        const res = await fetch(`${API_BASE}/api/admin/posts?${params.toString()}`, {
           credentials: "include",
           cache: "no-store",
         });
@@ -68,7 +89,7 @@ export default function AdminPosts() {
     return () => {
       cancelled = true;
     };
-  }, [page]);
+  }, [page, statusFilter, moderationFilter, sort, search]);
 
   const resolveImage = (path: string | null) => {
     if (!path) return null;
@@ -78,10 +99,73 @@ export default function AdminPosts() {
   return (
     <AdminGuard>
       <section className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h1 className="text-xl font-semibold text-white">Admin · Posts</h1>
-          <div className="text-sm text-white/60">
-            {data ? `${data.total} total` : loading ? "Loading…" : ""}
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h1 className="text-xl font-semibold text-white">Admin · Posts</h1>
+            <div className="text-sm text-white/60">
+              {data ? `${data.total} total` : loading ? "Loading…" : ""}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-3 rounded-2xl border border-white/10 bg-neutral-900/60 p-3 text-sm text-white/80">
+            <input
+              type="search"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search posts or users"
+              className="flex-1 min-w-[200px] rounded-lg bg-black/30 px-3 py-2 text-white placeholder:text-white/50"
+            />
+            <select
+              value={statusFilter}
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setPage(1);
+              }}
+              className="rounded-lg bg-black/30 px-3 py-2"
+            >
+              <option value="">All statuses</option>
+              <option value="PUBLISHED">Published</option>
+              <option value="PENDING">Pending</option>
+              <option value="DELETED">Deleted</option>
+            </select>
+            <select
+              value={moderationFilter}
+              onChange={(e) => {
+                setModerationFilter(e.target.value);
+                setPage(1);
+              }}
+              className="rounded-lg bg-black/30 px-3 py-2"
+            >
+              <option value="">All moderation</option>
+              <option value="PASSED">Passed</option>
+              <option value="PENDING">Pending</option>
+              <option value="REJECTED">Rejected</option>
+            </select>
+            <select
+              value={sort}
+              onChange={(e) => {
+                setSort(e.target.value);
+                setPage(1);
+              }}
+              className="rounded-lg bg-black/30 px-3 py-2"
+            >
+              <option value="created_desc">Newest first</option>
+              <option value="created_asc">Oldest first</option>
+              <option value="ratings_desc">Most ratings</option>
+              <option value="ratings_asc">Fewest ratings</option>
+            </select>
+            {(statusFilter || moderationFilter || search) && (
+              <button
+                onClick={() => {
+                  setStatusFilter("");
+                  setModerationFilter("");
+                  setSearchInput("");
+                }}
+                className="rounded-lg border border-white/15 px-3 py-2 text-white"
+              >
+                Clear
+              </button>
+            )}
           </div>
         </div>
 

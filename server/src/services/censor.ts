@@ -24,7 +24,10 @@ function getClient() {
 async function editImage(buffer: Buffer, mimeType: string) {
   const client = getClient();
   const model = client.getGenerativeModel({ model: modelName });
-  const prompt = "Censor the license plates in this car photo with black box if detected.";
+  const prompt = `
+ONLY blur actual automobile license plates using a rectangular black box.
+If no plates are visible, return the original photo unchanged and do not invent any blur.
+`.trim();
   const base64 = buffer.toString("base64");
 
   const result = await model.generateContent([
