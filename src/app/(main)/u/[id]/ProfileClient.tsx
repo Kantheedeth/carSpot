@@ -559,9 +559,9 @@ function EditProfileModal({
   onUpdated,
 }: EditProfileModalProps) {
   const [name, setName] = useState(initialName);
-  const [avatarUrl, setAvatarUrl] = useState(initialAvatar ?? "");
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const [removeExisting, setRemoveExisting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -572,10 +572,12 @@ function EditProfileModal({
     if (!file) {
       setAvatarFile(null);
       setPreview(null);
+      setRemoveExisting(false);
       return;
     }
     setAvatarFile(file);
     setPreview(URL.createObjectURL(file));
+    setRemoveExisting(false);
   };
 
   async function handleSave() {
@@ -588,8 +590,8 @@ function EditProfileModal({
     form.append("display_name", name.trim());
     if (avatarFile) {
       form.append("avatar", avatarFile);
-    } else if (avatarUrl !== initialAvatar) {
-      form.append("profile_pic_url", avatarUrl);
+    } else if (removeExisting && initialAvatar) {
+      form.append("profile_pic_url", "");
     }
 
     try {
@@ -668,17 +670,18 @@ function EditProfileModal({
               className="w-full rounded-lg border border-white/15 bg-black/30 px-3 py-2 text-sm"
             />
           )}
-          <p className="text-xs text-white/50">
-            Prefer a URL? Paste it below (ignored if a file is uploaded).
-          </p>
-          <input
-            type="url"
-            placeholder="https://example.com/me.jpg"
-            value={avatarUrl}
-            onChange={(e) => setAvatarUrl(e.target.value)}
-            disabled={!!avatarFile}
-            className="w-full rounded-lg border border-white/15 bg-black/30 px-3 py-2 text-sm"
-          />
+          {!preview && initialAvatar && !avatarFile && (
+            <button
+              type="button"
+              onClick={() => setRemoveExisting((v) => !v)}
+              className={[
+                "text-xs underline",
+                removeExisting ? "text-rose-300" : "text-white/60 hover:text-white",
+              ].join(" ")}
+            >
+              {removeExisting ? "Will remove current photo" : "Remove current photo"}
+            </button>
+          )}
         </div>
 
         {error && (

@@ -8,11 +8,15 @@ export default function SignupPage() {
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
-  const [profilePicUrl, setProfilePicUrl] = useState("");
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const apiBase = (process.env.NEXT_PUBLIC_API_BASE || "").replace(/\/+$/, "");
+  const googleAuthUrl = apiBase
+    ? `${apiBase}/api/auth/google`
+    : "/api/auth/google";
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -35,7 +39,6 @@ export default function SignupPage() {
       form.append("email", email);
       form.append("password", password);
       form.append("display_name", displayName);
-      if (profilePicUrl) form.append("profile_pic_url", profilePicUrl);
       if (avatarFile) form.append("avatar", avatarFile);
 
       const res = await fetch(`${base}/api/auth/signup`, {
@@ -57,6 +60,16 @@ export default function SignupPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const onGoogle = () => {
+    if (!googleAuthUrl) {
+      setErr("Google OAuth not configured.");
+      return;
+    }
+    setErr("");
+    setLoading(true);
+    window.location.href = googleAuthUrl;
   };
 
   return (
@@ -121,17 +134,6 @@ export default function SignupPage() {
               className="w-full rounded-lg bg-[#111827] border border-white/20 px-3 py-2 text-sm"
             />
           )}
-          <p className="text-xs text-white/40">
-            Prefer a URL? Paste it below instead of uploading.
-          </p>
-          <input
-            type="url"
-            placeholder="https://example.com/me.jpg"
-            value={profilePicUrl}
-            onChange={(e) => setProfilePicUrl(e.target.value)}
-            className="w-full rounded-lg bg-[#111827] border border-white/20 px-3 py-2 text-sm"
-            disabled={!!avatarFile}
-          />
         </div>
 
         <button
@@ -140,6 +142,14 @@ export default function SignupPage() {
           className="w-full rounded-lg bg-white text-black py-2 text-sm font-semibold hover:bg-gray-200 disabled:opacity-60"
         >
           {loading ? "Creating..." : "Sign up"}
+        </button>
+        <button
+          type="button"
+          onClick={onGoogle}
+          disabled={loading}
+          className="w-full rounded-lg border border-white/20 bg-white/5 py-2 text-sm font-semibold text-white hover:bg-white/10 disabled:opacity-60 flex items-center justify-center gap-2"
+        >
+          <span className="text-lg">ⓖ</span> Continue with Google
         </button>
 
         <button

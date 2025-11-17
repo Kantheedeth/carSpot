@@ -11,6 +11,11 @@ export default function LoginPage() {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const apiBase = (process.env.NEXT_PUBLIC_API_BASE || "").replace(/\/+$/, "");
+  const googleAuthUrl = apiBase
+    ? `${apiBase}/api/auth/google`
+    : "/api/auth/google";
+
   const onLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErr("");
@@ -34,6 +39,17 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const onGoogle = async () => {
+    if (!googleAuthUrl) {
+      setErr("Google OAuth not configured.");
+      return;
+    }
+    setErr("");
+    setLoading(true);
+    // Full page redirect so Google callback can return to the API host.
+    window.location.href = googleAuthUrl;
   };
 
   const onGuest = async () => {
@@ -83,6 +99,14 @@ export default function LoginPage() {
           className="w-full rounded-lg bg-white text-black py-2 text-sm font-semibold hover:bg-gray-200 disabled:opacity-60"
         >
           {loading ? "Signing in..." : "Log in"}
+        </button>
+        <button
+          type="button"
+          onClick={onGoogle}
+          disabled={loading}
+          className="w-full rounded-lg border border-white/20 bg-white/5 py-2 text-sm font-semibold text-white hover:bg-white/10 disabled:opacity-60 flex items-center justify-center gap-2"
+        >
+          <span className="text-lg">ⓖ</span> Continue with Google
         </button>
 
         <button
